@@ -1,0 +1,897 @@
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Parking Dashboard - Let's Connect</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: #1c1c1e;
+      color: #f5f5f7;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100vh;
+      overflow-x: hidden;
+    }
+
+    header {
+      width: 100%;
+      background: #2c2c2e;
+      padding: 20px 0;
+      text-align: center;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 2.5em;
+      color: #00ffea;
+      font-weight: bold;
+    }
+
+    .dashboard-container {
+      display: flex;
+      width: 90%;
+      max-width: 1400px;
+      margin-top: 20px;
+      gap: 20px;
+    }
+
+    .slots-section, .side-section {
+      background: #2c2c2e;
+      border-radius: 20px;
+      padding: 20px;
+      flex: 1;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    }
+
+    .slots-section {
+      flex: 2;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 15px;
+      margin-top: 20px;
+    }
+
+    .slot {
+      background: #3a3a3c;
+      border-radius: 15px;
+      height: 100px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: bold;
+      font-size: 1.1em;
+      position: relative;
+      transition: transform 0.3s;
+      cursor: pointer;
+    }
+
+    .slot.free { background-color: #4cd964; }
+    .slot.occupied { background-color: #ff3b30; }
+    .slot.bike { background-color: #5ac8fa; }
+
+    .slot:hover {
+      transform: scale(1.05);
+    }
+
+    .tooltip {
+      visibility: hidden;
+      position: absolute;
+      top: -30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 5px;
+      border-radius: 5px;
+      font-size: 0.8em;
+    }
+
+    .slot:hover .tooltip {
+      visibility: visible;
+    }
+
+    .section-title {
+      color: #00ffea;
+      margin-bottom: 10px;
+      font-size: 1.8em;
+    }
+
+    .payment-section, .history-section {
+      margin-top: 20px;
+    }
+
+    button {
+      background: #00ffea;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 1em;
+      font-weight: bold;
+      cursor: pointer;
+      color: #1c1c1e;
+      margin-top: 10px;
+    }
+
+    button:hover {
+      background: #00d9c0;
+    }
+
+    .history-list {
+      list-style: none;
+      padding: 0;
+    }
+
+    .history-item {
+      background: #3a3a3c;
+      margin: 8px 0;
+      padding: 10px;
+      border-radius: 10px;
+    }
+
+    /* Responsive */
+    @media(max-width: 768px) {
+      .dashboard-container {
+        flex-direction: column;
+        align-items: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Let's Connect - Smart Parking Dashboard</h1>
+  </header>
+
+  <div class="dashboard-container">
+    <div class="slots-section">
+      <div class="section-title">Parking Slots</div>
+      <div class="grid" id="parkingGrid"></div>
+    </div>
+
+    <div class="side-section">
+      <div class="payment-section">
+        <div class="section-title">Payment Details</div>
+        <p><strong>Vehicle Type:</strong> <span id="vehicleType">-</span></p>
+        <p><strong>Duration:</strong> <span id="duration">-</span></p>
+        <p><strong>Cost:</strong> $<span id="cost">0.00</span></p>
+        <button onclick="simulatePayment()">Pay Now</button>
+      </div>
+
+      <div class="history-section">
+        <div class="section-title">Recent Parking</div>
+        <ul class="history-list" id="historyList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function fetchSlots() {
+        try {
+            const response = await fetch('/current');
+            const vehicles = await response.json();
+            console.log(vehicles);
+
+            const grid = document.getElementById('parkingGrid');
+            grid.innerHTML = '';  // Clear previous slots
+
+            const totalSlots = 15;
+            const slotMap = new Map();
+
+            vehicles.forEach(vehicle => {
+                slotMap.set(vehicle.slot_number, vehicle);
+            });
+
+            for (let i = 1; i <= totalSlots; i++) {
+                const slot = document.createElement('div');
+                slot.className = 'slot';
+                slot.textContent = `Slot ${i}`;
+
+                if (slotMap.has(i)) {
+                    const vehicle = slotMap.get(i);
+                    slot.classList.add(vehicle.vehicle_type === 'bike' ? 'bike' : 'occupied');
+
+                    const tooltip = document.createElement('div');
+                    tooltip.className = 'tooltip';
+                    tooltip.innerHTML = `
+                        Plate: ${vehicle.number_plate}<br>
+                        Type: ${vehicle.vehicle_type}<br>
+                        Entry: ${vehicle.entry_time}
+                    `;
+                    slot.appendChild(tooltip);
+
+                    const icon = document.createElement('div');
+                    icon.className = 'icon';
+                    icon.innerHTML = vehicle.vehicle_type === 'bike' ? '<i class="fas fa-motorcycle"></i>' : '<i class="fas fa-car"></i>';
+                    slot.appendChild(icon);
+
+                    slot.onclick = () => openSlotModal(vehicle);
+                } else {
+                    slot.classList.add('free');
+
+                    const tooltip = document.createElement('div');
+                    tooltip.className = 'tooltip';
+                    tooltip.textContent = "Available";
+                    slot.appendChild(tooltip);
+
+                    const icon = document.createElement('div');
+                    icon.className = 'icon';
+                    icon.innerHTML = '<i class="fas fa-parking"></i>';
+                    slot.appendChild(icon);
+                }
+
+                grid.appendChild(slot);
+            }
+        } catch (error) {
+            console.error('Error fetching slots:', error);
+        }
+    }
+
+    function openSlotModal(vehicle) {
+        const modal = document.getElementById("slotModal");
+        const slotDetails = document.getElementById("slotDetails");
+
+        slotDetails.innerHTML = `
+            <p><strong>Plate Number:</strong> ${vehicle.number_plate}</p>
+            <p><strong>Vehicle Type:</strong> ${vehicle.vehicle_type}</p>
+            <p><strong>Slot Number:</strong> ${vehicle.slot_number}</p>
+            <p><strong>Entry Time:</strong> ${vehicle.entry_time}</p>
+        `;
+
+        modal.style.display = "block";
+
+        document.getElementById('vehicleType').innerText = vehicle.vehicle_type;
+        document.getElementById('duration').innerText = '-';  // Need to calculate based on exit
+        document.getElementById('cost').innerText = '-';       // Need to calculate when exiting
+    }
+
+    const closeModal = document.getElementsByClassName("close")[0];
+    closeModal.onclick = function() {
+        const modal = document.getElementById("slotModal");
+        modal.style.display = "none";
+    };
+
+    async function updateHistory() {
+        try {
+            const response = await fetch('/history');
+            const history = await response.json();
+            const historyList = document.getElementById('historyList');
+            historyList.innerHTML = ''; // Clear
+
+            history.forEach(record => {
+                const historyItem = document.createElement('li');
+                historyItem.className = 'history-item';
+                historyItem.innerHTML = `${record.number_plate} (${record.vehicle_type}) - ₹${record.payment_amount} (Exited: ${record.exit_time})`;
+                historyList.appendChild(historyItem);
+            });
+        } catch (error) {
+            console.error('Error fetching history:', error);
+        }
+    }
+
+    fetchSlots();
+    updateHistory();
+    setInterval(fetchSlots, 3000);
+</script>
+
+</body>
+</html> -->
+<!-- <!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Smart Parking Dashboard - Let's Connect</title>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: #1c1c1e;
+      color: #f5f5f7;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100vh;
+      overflow-x: hidden;
+    }
+
+    header {
+      width: 100%;
+      background: #2c2c2e;
+      padding: 20px 0;
+      text-align: center;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 2.5em;
+      color: #00ffea;
+      font-weight: bold;
+    }
+
+    .dashboard-container {
+      display: flex;
+      width: 90%;
+      max-width: 1400px;
+      margin-top: 20px;
+      gap: 20px;
+      flex: 1;
+      height: 80vh;
+    }
+
+    .slots-section, .side-section {
+      background: #2c2c2e;
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    }
+
+    .slots-section {
+      flex: 2;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .side-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      height: 100%;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 15px;
+      margin-top: 20px;
+    }
+
+    .slot {
+      background: #3a3a3c;
+      border-radius: 15px;
+      height: 100px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: bold;
+      font-size: 1.1em;
+      position: relative;
+      transition: transform 0.3s;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      flex-direction: column;
+    }
+
+    .slot.free { background-color: #4cd964; }
+    .slot.occupied { background-color: #ff3b30; }
+    .slot.bike { background-color: #5ac8fa; }
+
+    .slot:hover {
+      transform: scale(1.05);
+    }
+
+    .tooltip {
+      visibility: hidden;
+      position: absolute;
+      top: -30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 5px;
+      border-radius: 5px;
+      font-size: 0.8em;
+      z-index: 2;
+      white-space: pre-line;
+    }
+
+    .slot:hover .tooltip {
+      visibility: visible;
+    }
+
+    .icon {
+      margin-top: 8px;
+      font-size: 1.5em;
+    }
+
+    .section-title {
+      color: #00ffea;
+      margin-bottom: 10px;
+      font-size: 1.8em;
+    }
+
+    .payment-section {
+      margin-bottom: 20px;
+    }
+
+    .history-section {
+      margin-top: auto;
+      width: 100%;
+    }
+
+    button {
+      background: #00ffea;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 1em;
+      font-weight: bold;
+      cursor: pointer;
+      color: #1c1c1e;
+      margin-top: 10px;
+    }
+
+    button:hover {
+      background: #00d9c0;
+    }
+
+    .history-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .history-item {
+      background: #3a3a3c;
+      margin: 8px 0;
+      padding: 10px;
+      border-radius: 10px;
+    }
+
+    /* Responsive */
+    @media(max-width: 768px) {
+      .dashboard-container {
+        flex-direction: column;
+        align-items: center;
+        height: auto;
+      }
+      .side-section, .slots-section {
+        width: 100%;
+        margin-bottom: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Let's Connect - Smart Parking Dashboard</h1>
+  </header>
+
+  <div class="dashboard-container">
+    <div class="slots-section">
+      <div class="section-title">Parking Slots</div>
+      <div class="grid" id="parkingGrid"></div>
+    </div>
+
+    <div class="side-section">
+      <div class="payment-section">
+        <div class="section-title">Payment Details</div>
+        <p><strong>Vehicle Type:</strong> <span id="vehicleType">-</span></p>
+        <p><strong>Duration:</strong> <span id="duration">-</span></p>
+        <p><strong>Cost:</strong> $<span id="cost">0.00</span></p>
+        <button onclick="simulatePayment()">Pay Now</button>
+      </div>
+      <div class="history-section">
+        <div class="section-title">Recent Parking</div>
+        <ul class="history-list" id="historyList"></ul>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    async function fetchSlots() {
+      try {
+        const response = await fetch('/current');
+        const vehicles = await response.json();
+        const grid = document.getElementById('parkingGrid');
+        grid.innerHTML = '';
+
+        const totalSlots = 15;
+        const slotMap = new Map();
+        vehicles.forEach(vehicle => {
+          slotMap.set(vehicle.slot_number, vehicle);
+        });
+
+        for (let i = 1; i <= totalSlots; i++) {
+          const slot = document.createElement('div');
+          slot.className = 'slot';
+          slot.textContent = `Slot ${i}`;
+
+          if (slotMap.has(i)) {
+            const vehicle = slotMap.get(i);
+            slot.classList.add(vehicle.vehicle_type === 'bike' ? 'bike' : 'occupied');
+
+            const tooltip = document.createElement('div');
+            tooltip.className = 'tooltip';
+            tooltip.innerHTML = `Plate: ${vehicle.number_plate}<br>
+Type: ${vehicle.vehicle_type}<br>
+Entry: ${vehicle.entry_time}`;
+            slot.appendChild(tooltip);
+
+            const icon = document.createElement('div');
+            icon.className = 'icon';
+            icon.innerHTML = vehicle.vehicle_type === 'bike'
+              ? '<i class="fas fa-motorcycle"></i>'
+              : '<i class="fas fa-car"></i>';
+            slot.appendChild(icon);
+
+            slot.onclick = () => openSlotModal(vehicle);
+          } else {
+            slot.classList.add('free');
+
+            const tooltip = document.createElement('div');
+            tooltip.className = 'tooltip';
+            tooltip.textContent = "Available";
+            slot.appendChild(tooltip);
+
+            const icon = document.createElement('div');
+            icon.className = 'icon';
+            icon.innerHTML = '<i class="fas fa-parking"></i>';
+            slot.appendChild(icon);
+          }
+
+          grid.appendChild(slot);
+        }
+      } catch (error) {
+        console.error('Error fetching slots:', error);
+      }
+    }
+
+    function openSlotModal(vehicle) {
+      document.getElementById('vehicleType').innerText = vehicle.vehicle_type;
+      document.getElementById('duration').innerText = '-';
+      document.getElementById('cost').innerText = '-';
+      // Optionally, show a modal with more details if needed
+    }
+
+    async function updateHistory() {
+      try {
+        const response = await fetch('/history');
+        const history = await response.json();
+        const historyList = document.getElementById('historyList');
+        historyList.innerHTML = '';
+        history.forEach(record => {
+          const historyItem = document.createElement('li');
+          historyItem.className = 'history-item';
+          historyItem.innerHTML = `${record.number_plate} (${record.vehicle_type}) - ₹${record.payment_amount} (Exited: ${record.exit_time})`;
+          historyList.appendChild(historyItem);
+        });
+      } catch (error) {
+        console.error('Error fetching history:', error);
+      }
+    }
+
+    function simulatePayment() {
+      alert("Payment simulation!");
+    }
+
+    fetchSlots();
+    updateHistory();
+    setInterval(fetchSlots, 3000);
+    setInterval(updateHistory, 10000);
+  </script>
+</body>
+</html> -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Let's Connect - Smart Parking Dashboard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: #1c1c1e;
+      color: #f5f5f7;
+      margin: 0;
+      padding: 0;
+      min-height: 100vh;
+    }
+
+    header {
+      width: 100%;
+      background: #2c2c2e;
+      padding: 20px 0;
+      text-align: center;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.5);
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 2.5em;
+      color: #00ffea;
+      font-weight: bold;
+    }
+
+    .main-dashboard {
+      display: flex;
+      flex-direction: column;
+      width: 95vw;
+      max-width: 1400px;
+      margin: 20px auto 0 auto;
+      gap: 20px;
+    }
+
+    .dashboard-row {
+      display: flex;
+      flex-direction: row;
+      gap: 20px;
+    }
+
+    .slots-section {
+      flex: 2;
+      background: #2c2c2e;
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+      min-height: 400px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 15px;
+      margin-top: 20px;
+      flex: 1;
+    }
+
+    .slot {
+      background: #3a3a3c;
+      border-radius: 15px;
+      height: 100px;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      font-weight: bold;
+      font-size: 1.1em;
+      position: relative;
+      transition: transform 0.3s;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      flex-direction: column;
+    }
+
+    .slot.free { background-color: #4cd964; }
+    .slot.occupied { background-color: #ff3b30; }
+    .slot.bike { background-color: #5ac8fa; }
+
+    .slot:hover {
+      transform: scale(1.05);
+    }
+
+    .tooltip {
+      visibility: hidden;
+      position: absolute;
+      top: -30px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.7);
+      color: #fff;
+      padding: 5px;
+      border-radius: 5px;
+      font-size: 0.8em;
+      z-index: 2;
+      white-space: pre-line;
+    }
+
+    .slot:hover .tooltip {
+      visibility: visible;
+    }
+
+    .icon {
+      margin-top: 8px;
+      font-size: 1.5em;
+    }
+
+    .section-title {
+      color: #00ffea;
+      margin-bottom: 10px;
+      font-size: 1.5em;
+    }
+
+    .side-section {
+      flex: 1;
+      background: #2c2c2e;
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+      display: flex;
+      flex-direction: column;
+      min-width: 250px;
+      min-height: 400px;
+    }
+
+    .payment-section {
+      margin-bottom: 20px;
+    }
+
+    .recent-parking-section {
+      width: 100%;
+      background: #2c2c2e;
+      border-radius: 20px;
+      padding: 20px;
+      box-shadow: 0 0 20px rgba(0,0,0,0.5);
+    }
+
+    button {
+      background: #00ffea;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 10px;
+      font-size: 1em;
+      font-weight: bold;
+      cursor: pointer;
+      color: #1c1c1e;
+      margin-top: 10px;
+    }
+
+    button:hover {
+      background: #00d9c0;
+    }
+
+    .history-list {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+    }
+
+    .history-item {
+      background: #3a3a3c;
+      margin: 8px 0;
+      padding: 10px;
+      border-radius: 10px;
+    }
+
+    /* Responsive */
+    @media(max-width: 900px) {
+      .dashboard-row {
+        flex-direction: column;
+      }
+      .slots-section, .side-section {
+        width: 100%;
+        min-width: unset;
+        margin-bottom: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Let's Connect - Smart Parking Dashboard</h1>
+  </header>
+
+  <div class="main-dashboard">
+    <div class="dashboard-row">
+      <div class="slots-section">
+        <div class="section-title">Parking Slots</div>
+        <div class="grid" id="parkingGrid"></div>
+      </div>
+      <div class="side-section">
+        <div class="payment-section">
+          <div class="section-title">Payment Details</div>
+          <p><strong>Vehicle Type:</strong> <span id="vehicleType">-</span></p>
+          <p><strong>Duration:</strong> <span id="duration">-</span></p>
+          <p><strong>Cost:</strong> $<span id="cost">0.00</span></p>
+          <button onclick="simulatePayment()">Pay Now</button>
+        </div>
+      </div>
+    </div>
+    <div class="recent-parking-section">
+      <div class="section-title">Recent Parking</div>
+      <ul class="history-list" id="historyList"></ul>
+    </div>
+  </div>
+
+  <script>
+    // Always show slots, even if API is down
+    function renderSlots(vehicles = []) {
+      const grid = document.getElementById('parkingGrid');
+      grid.innerHTML = '';
+      const totalSlots = 15;
+      const slotMap = new Map();
+      vehicles.forEach(vehicle => {
+        slotMap.set(vehicle.slot_number, vehicle);
+      });
+      for (let i = 1; i <= totalSlots; i++) {
+        const slot = document.createElement('div');
+        slot.className = 'slot';
+        slot.textContent = `Slot ${i}`;
+        if (slotMap.has(i)) {
+          const vehicle = slotMap.get(i);
+          slot.classList.add(vehicle.vehicle_type === 'bike' ? 'bike' : 'occupied');
+          const tooltip = document.createElement('div');
+          tooltip.className = 'tooltip';
+          tooltip.innerHTML = `Plate: ${vehicle.number_plate}<br>
+Type: ${vehicle.vehicle_type}<br>
+Entry: ${vehicle.entry_time}`;
+          slot.appendChild(tooltip);
+          const icon = document.createElement('div');
+          icon.className = 'icon';
+          icon.innerHTML = vehicle.vehicle_type === 'bike'
+            ? '<i class="fas fa-motorcycle"></i>'
+            : '<i class="fas fa-car"></i>';
+          slot.appendChild(icon);
+          slot.onclick = () => openSlotModal(vehicle);
+        } else {
+          slot.classList.add('free');
+          const tooltip = document.createElement('div');
+          tooltip.className = 'tooltip';
+          tooltip.textContent = "Available";
+          slot.appendChild(tooltip);
+          const icon = document.createElement('div');
+          icon.className = 'icon';
+          icon.innerHTML = '<i class="fas fa-parking"></i>';
+          slot.appendChild(icon);
+        }
+        grid.appendChild(slot);
+      }
+    }
+
+    async function fetchSlots() {
+      try {
+        const response = await fetch('/current');
+        if (!response.ok) throw new Error('API error');
+        const vehicles = await response.json();
+        renderSlots(vehicles);
+      } catch (error) {
+        // If API fails, show all as empty
+        renderSlots([]);
+      }
+    }
+
+    function openSlotModal(vehicle) {
+      document.getElementById('vehicleType').innerText = vehicle.vehicle_type;
+      document.getElementById('duration').innerText = '-';
+      document.getElementById('cost').innerText = '-';
+    }
+
+    async function updateHistory() {
+      try {
+        const response = await fetch('/history');
+        if (!response.ok) throw new Error('API error');
+        const history = await response.json();
+        const historyList = document.getElementById('historyList');
+        historyList.innerHTML = '';
+        history.forEach(record => {
+          const historyItem = document.createElement('li');
+          historyItem.className = 'history-item';
+          historyItem.innerHTML = `${record.number_plate} (${record.vehicle_type}) - ₹${record.payment_amount} (Exited: ${record.exit_time})`;
+          historyList.appendChild(historyItem);
+        });
+      } catch (error) {
+        // Show placeholder if API fails
+        const historyList = document.getElementById('historyList');
+        historyList.innerHTML = '<li class="history-item">No recent parking data.</li>';
+      }
+    }
+
+    function simulatePayment() {
+      alert("Payment simulation!");
+    }
+
+    // Initial render
+    renderSlots(); // So slots are always visible
+    fetchSlots();
+    updateHistory();
+    setInterval(fetchSlots, 3000);
+    setInterval(updateHistory, 10000);
+  </script>
+</body>
+</html>
