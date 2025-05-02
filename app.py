@@ -1,268 +1,250 @@
-# # app.py
-# from flask import Flask, request, jsonify,render_template, send_from_directory
-# import os
-# from flask import Flask, request, jsonify
-# import sqlite3
-# from datetime import datetime
-
-# from ultralytics import YOLO
-# import cv2
-
-# # Load the YOLO model
-# model = YOLO(r'C:\Users\mohdf\OneDrive\Desktop\ASEP\project\BEST2.pt')
-
-# app = Flask(__name__)
- 
-# # Create or connect to SQLite database
-# def get_db_connection():
-#     conn = sqlite3.connect('parking_system.db')
-#     conn.row_factory = sqlite3.Row
-#     return conn
-
-# @app.route('/dashboard')
-# def serve_dashboard():
-#     return render_template('index.html')
-
-# @app.route('/detect', methods=['POST'])
-# def detect_vehicle():
-#     if 'image' not in request.files:
-#         return "No image uploaded", 400
-    
-#     image_file = request.files['image']
-#     image_path = f"uploads/{image_file.filename}"
-#     image_file.save(image_path)
-
-#     # Run detection
-#     results = model.predict(source=image_path, save=False)
-
-#     # Get predicted labels (you can print results[0].boxes.cls to check class predictions)
-#     classes = results[0].boxes.cls.cpu().numpy()
-    
-#     # For now just return detected classes
-#     return {"detected_classes": classes.tolist()}
-
-# # # Home Route
-# # @app.route('/')
-# # def index():
-# #     return "Parking System Backend Running!"
-
-# # Insert new vehicle entry
-# @app.route('/entry', methods=['POST'])
-# def vehicle_entry():
-#     data = request.json
-#     number_plate = data['number_plate']
-#     vehicle_type = data['vehicle_type']
-#     slot_number = data['slot_number']
-#     entry_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-#     conn = get_db_connection()
-#     conn.execute('INSERT INTO vehicles (number_plate, vehicle_type, slot_number, entry_time) VALUES (?, ?, ?, ?)',
-#                  (number_plate, vehicle_type, slot_number, entry_time))
-#     conn.commit()
-#     conn.close()
-
-#     return jsonify({'message': 'Vehicle entry recorded successfully'}), 200
-
-# # Show all current parked vehicles
-# @app.route('/current', methods=['GET'])
-# def get_current_vehicles():
-#     conn = get_db_connection()
-#     vehicles = conn.execute('SELECT * FROM vehicles').fetchall()
-#     conn.close()
-
-#     vehicles_list = [dict(vehicle) for vehicle in vehicles]
-#     return jsonify(vehicles_list)
-
-# # Vehicle Exit and Payment
-# @app.route('/exit', methods=['POST'])
-# def vehicle_exit():
-#     data = request.json
-#     number_plate = data['number_plate']
-#     exit_time = datetime.now()
-
-#     conn = get_db_connection()
-#     vehicle = conn.execute('SELECT * FROM vehicles WHERE number_plate = ?', (number_plate,)).fetchone()
-
-#     if vehicle is None:
-#         return jsonify({'message': 'Vehicle not found'}), 404
-
-#     entry_time = datetime.strptime(vehicle['entry_time'], "%Y-%m-%d %H:%M:%S")
-#     parked_minutes = (exit_time - entry_time).total_seconds() / 60
-#     payment_amount = round(parked_minutes * 1, 2)  # Example: ₹1 per minute
-
-#     # Insert into history
-#     conn.execute('INSERT INTO history (number_plate, vehicle_type, slot_number, entry_time, exit_time, payment_amount) VALUES (?, ?, ?, ?, ?, ?)',
-#                  (vehicle['number_plate'], vehicle['vehicle_type'], vehicle['slot_number'], vehicle['entry_time'], exit_time.strftime("%Y-%m-%d %H:%M:%S"), payment_amount))
-
-#     # Remove from current vehicles
-#     conn.execute('DELETE FROM vehicles WHERE number_plate = ?', (number_plate,))
-#     conn.commit()
-#     conn.close()
-
-#     return jsonify({'payment_amount': payment_amount}), 200
-
-# # Show history
-# @app.route('/history', methods=['GET'])
-# def get_history():
-#     conn = get_db_connection()
-#     history = conn.execute('SELECT * FROM history ORDER BY exit_time DESC').fetchall()
-#     conn.close()
-
-#     history_list = [dict(record) for record in history]
-#     return jsonify(history_list)
-
-# if __name__ == '__main__':
-#     app.run(debug=True)
-
-
-# app.py
-from flask import Flask, request, jsonify, render_template
 import os
-import sqlite3
+import uuid
+import time
 from datetime import datetime
+from collections import deque
+from flask import Flask, render_template, request, jsonify, send_from_directory
 
-from ultralytics import YOLO
+
 import cv2
-import easyocr
-import numpy as np
+from PIL import Image
+import pytesseract
+from ultralytics import YOLO
+import qrcode
+from fpdf import FPDF
 
-# Load the YOLO model
-model = YOLO('C:/Users/mohdf/OneDrive/Desktop/ASEP/project/BEST2.pt') # Ensure this path is correct
+import razorpay
 
-# Initialize OCR reader
-reader = easyocr.Reader(['en'])
+# Replace with your Razorpay Test Mode keys
+RAZORPAY_KEY_ID = "rzp_test_amuSbEd1v4Drm4"
+RAZORPAY_KEY_SECRET = "4gEt025e0D7J2qVlEfre9EFO"
 
-# Flask app initialization
-app = Flask(__name__)
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
-# Database connection
-def get_db_connection():
-    conn = sqlite3.connect('parking_system.db')
-    conn.row_factory = sqlite3.Row
-    return conn
 
-# Route to serve dashboard (HTML)
-@app.route('/dashboard')
-def serve_dashboard():
+app = Flask(__name__, static_url_path='', static_folder='static')
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['RECEIPT_FOLDER'] = 'receipts'
+app.config['QR_FOLDER'] = 'static/qrcodes'
+
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+os.makedirs(app.config['RECEIPT_FOLDER'], exist_ok=True)
+os.makedirs(app.config['QR_FOLDER'], exist_ok=True)
+
+# Initialize parking slots
+SLOTS = {f"P{i+1}": None for i in range(10)}
+FREE_SLOT_QUEUE = deque(SLOTS.keys())
+
+# Load YOLO model
+yolo_model = YOLO("C:/Users/sai/Downloads/BEST2.pt")
+
+def extract_plate_number(image_path):
+    img = cv2.imread(image_path)
+    results = yolo_model(img)[0]
+    for box in results.boxes:
+        cls_id = int(box.cls[0])
+        if cls_id == 0:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            plate_crop = img[y1:y2, x1:x2]
+            gray = cv2.cvtColor(plate_crop, cv2.COLOR_BGR2GRAY)
+            text = pytesseract.image_to_string(
+                gray, config='--psm 7 -c tessedit_char_whitelist=ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'
+            )
+            return text.strip().replace(" ", "").replace("\n", "")
+    return "UNKNOWN"
+
+def generate_mock_qr(amount, plate):
+    data = f"https://mockpayment.com/pay?plate={plate}&amount={amount}"
+    filename = f"{plate}_{int(time.time())}.png"
+    qr_path = os.path.join(app.config['QR_FOLDER'], filename)
+    qr = qrcode.QRCode(
+        version=1,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,
+        box_size=10,
+        border=4,
+    )
+    qr.add_data(data)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    img.save(qr_path)
+    return f"/static/qrcodes/{filename}"
+
+def generate_pdf_receipt(plate, duration, amount):
+    receipt_id = str(uuid.uuid4())
+    receipt_path = os.path.join(app.config['RECEIPT_FOLDER'], f"{receipt_id}.pdf")
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", size=12)
+    pdf.cell(200, 10, f"Receipt for vehicle {plate}", ln=True)
+    pdf.cell(200, 10, f"Duration: {duration:.2f} minutes", ln=True)
+    pdf.cell(200, 10, f"Amount: Rs. {amount}", ln=True)
+    pdf.output(receipt_path)
+    return receipt_id
+
+@app.route('/')
+def index():
     return render_template('index.html')
 
-# ----------- OCR + YOLO Helper Functions -----------
+@app.route('/slots')
+def get_slots():
+    return jsonify({slot: 'red' if SLOTS[slot] else 'green' for slot in SLOTS})
 
-def crop_plate(image_path, results):
-    boxes = results[0].boxes.xyxy.cpu().numpy()
-    labels = results[0].boxes.cls.cpu().numpy()
-    img = cv2.imread(image_path)
+# Track payment status before allowing receipt generation
+PAYMENT_TRACKER = {}
 
-    for i, label in enumerate(labels):
-        if int(label) == 0:  # Assuming label 0 = license plate
-            x1, y1, x2, y2 = map(int, boxes[i])
-            cropped = img[y1:y2, x1:x2]
-            return cropped
-    return None
+@app.route('/process_entry', methods=['POST'])
+def process_entry():
+    file = request.files.get('image')
+    if not file:
+        return jsonify({'error': 'No file uploaded'}), 400
 
-def ocr_plate(cropped_img):
-    gray = cv2.cvtColor(cropped_img, cv2.COLOR_BGR2GRAY)
-    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    result = reader.readtext(binary)
-    return ' '.join([text[1] for text in result]) if result else None
+    filename = f"{uuid.uuid4()}.jpg"
+    path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(path)
 
-# ----------- Detection Route -----------
+    plate = extract_plate_number(path)
+    time_now = datetime.now()
 
-@app.route('/detect', methods=['POST'])
-def detect_vehicle():
-    if 'image' not in request.files:
-        return "No image uploaded", 400
+    # Check if the vehicle is already parked
+    for slot, info in SLOTS.items():
+        if info and info['plate'].upper() == plate.upper():
+            return jsonify({
+                "message": f"Vehicle with plate {plate} is already parked in slot {slot}",
+                "slot": slot,
+                "plate": plate
+            })
 
-    image_file = request.files['image']
-    os.makedirs("uploads", exist_ok=True)
-    image_path = f"uploads/{image_file.filename}"
-    image_file.save(image_path)
+    # If no match, assign a new slot
+    if not FREE_SLOT_QUEUE:
+        return jsonify({"message": "All slots are full"}), 200
 
-    results = model(image_path)
+    slot = FREE_SLOT_QUEUE.popleft()
+    SLOTS[slot] = {"plate": plate, "entry_time": time_now}
 
-    cropped = crop_plate(image_path, results)
-    if cropped is None:
-        return jsonify({"error": "No license plate detected"}), 404
+    return jsonify({
+        "message": f"Slot {slot} assigned",
+        "slot": slot,
+        "plate": plate
+    })
 
-    plate_number = ocr_plate(cropped)
-    if not plate_number:
-        return jsonify({"error": "OCR failed to extract text"}), 500
+@app.route('/process_exit', methods=['POST'])
+def process_exit():
+    try:
+        file = request.files.get('image')
+        if not file:
+            return jsonify({'error': 'No file uploaded'}), 400
 
-    return jsonify({"plate_number": plate_number}), 200
+        filename = f"{uuid.uuid4()}.jpg"
+        path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(path)
 
-# ----------- Vehicle Entry -----------
+        exit_plate = extract_plate_number(path)
+        matched_slot = None
 
-@app.route('/entry', methods=['POST'])
-def vehicle_entry():
-    data = request.json
-    number_plate = data['number_plate']
-    vehicle_type = data['vehicle_type']
-    slot_number = data['slot_number']
-    entry_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for slot, info in SLOTS.items():
+            if info and info['plate'].upper() == exit_plate.upper():
+                matched_slot = slot
+                break
 
-    conn = get_db_connection()
-    conn.execute(
-        'INSERT INTO vehicles (number_plate, vehicle_type, slot_number, entry_time) VALUES (?, ?, ?, ?)',
-        (number_plate, vehicle_type, slot_number, entry_time)
-    )
-    conn.commit()
-    conn.close()
+        if not matched_slot:
+            return jsonify({'error': f"No match found for plate {exit_plate}"}), 404
 
-    return jsonify({'message': 'Vehicle entry recorded successfully'}), 200
+        entry_time = SLOTS[matched_slot]['entry_time']
+        duration_seconds = (datetime.now() - entry_time).total_seconds()
+        cost = int(duration_seconds)
 
-# ----------- Get Current Parked Vehicles -----------
+        # Create Razorpay order (in test mode or real as needed)
+        order = razorpay_client.order.create({
+            "amount": cost * 100,  # amount in paise
+            "currency": "INR",
+            "payment_capture": 1,
+            "receipt": f"receipt_{exit_plate}_{int(time.time())}"
+        })
 
-@app.route('/current', methods=['GET'])
-def get_current_vehicles():
-    conn = get_db_connection()
-    vehicles = conn.execute('SELECT * FROM vehicles').fetchall()
-    conn.close()
+        # Store temporary data until payment is completed
+        PAYMENT_TRACKER[order['id']] = {
+            'plate': exit_plate,
+            'slot': matched_slot,
+            'entry_time': entry_time,
+            'cost': cost,
+            'duration': duration_seconds / 60  # in minutes
+        }
 
-    vehicles_list = [dict(vehicle) for vehicle in vehicles]
-    return jsonify(vehicles_list)
+        return jsonify({
+            "message": "Payment required",
+            "order_id": order['id'],
+            "amount": cost,
+            "razorpay_key": "rzp_test_amuSbEd1v4Drm4",  # Replace with actual test key
+            "slot_freed": matched_slot,
+            "plate": exit_plate
+        })
 
-# ----------- Vehicle Exit and Payment -----------
+    except Exception as e:
+        print(f"[ERROR] {e}")
+        return jsonify({'error': 'Internal server error'}), 500
 
-@app.route('/exit', methods=['POST'])
-def vehicle_exit():
-    data = request.json
-    number_plate = data['number_plate']
-    exit_time = datetime.now()
 
-    conn = get_db_connection()
-    vehicle = conn.execute('SELECT * FROM vehicles WHERE number_plate = ?', (number_plate,)).fetchone()
+@app.route('/verify_payment', methods=['POST'])
+def verify_payment():
+    try:
+        data = request.json
+        order_id = data.get('order_id')
+        payment_id = data.get('payment_id')
+        signature = data.get('signature')
 
-    if vehicle is None:
-        return jsonify({'message': 'Vehicle not found'}), 404
+        params_dict = {
+            'razorpay_order_id': order_id,
+            'razorpay_payment_id': payment_id,
+            'razorpay_signature': signature
+        }
 
-    entry_time = datetime.strptime(vehicle['entry_time'], "%Y-%m-%d %H:%M:%S")
-    parked_minutes = (exit_time - entry_time).total_seconds() / 60
-    payment_amount = round(parked_minutes * 1, 2)  # ₹1 per minute
+        razorpay_client.utility.verify_payment_signature(params_dict)
 
-    # Insert into history
-    conn.execute('INSERT INTO history (number_plate, vehicle_type, slot_number, entry_time, exit_time, payment_amount) VALUES (?, ?, ?, ?, ?, ?)',
-                 (vehicle['number_plate'], vehicle['vehicle_type'], vehicle['slot_number'], vehicle['entry_time'],
-                  exit_time.strftime("%Y-%m-%d %H:%M:%S"), payment_amount))
+        # Get transaction details
+        payment_info = PAYMENT_TRACKER.pop(order_id, None)
+        if not payment_info:
+            return jsonify({"error": "Payment info not found"}), 404
 
-    # Remove from current parking
-    conn.execute('DELETE FROM vehicles WHERE number_plate = ?', (number_plate,))
-    conn.commit()
-    conn.close()
+        receipt_id = generate_pdf_receipt(
+            payment_info['plate'],
+            payment_info['duration'],
+            payment_info['cost']
+        )
 
-    return jsonify({'payment_amount': payment_amount}), 200
+        # Free the slot
+        SLOTS[payment_info['slot']] = None
+        FREE_SLOT_QUEUE.append(payment_info['slot'])
 
-# ----------- Get Parking History -----------
+        return jsonify({
+            "message": "Payment verified",
+            "receipt_url": f"/receipt/{receipt_id}"
+        })
 
-@app.route('/history', methods=['GET'])
-def get_history():
-    conn = get_db_connection()
-    history = conn.execute('SELECT * FROM history ORDER BY exit_time DESC').fetchall()
-    conn.close()
+    except razorpay.errors.SignatureVerificationError:
+        return jsonify({"error": "Signature verification failed"}), 400
+    except Exception as e:
+        print(f"[ERROR in verify_payment]: {e}")
+        return jsonify({"error": "Internal server error"}), 500
 
-    history_list = [dict(record) for record in history]
-    return jsonify(history_list)
 
-# ----------- Run Server -----------
+@app.route('/receipt/<receipt_id>')
+def download_receipt(receipt_id):
+    try:
+        filename = f"{receipt_id}.pdf"
+        filepath = os.path.join(app.config['RECEIPT_FOLDER'], filename)
+        if not os.path.exists(filepath):
+            return jsonify({"error": "Receipt not found"}), 404
+        return send_from_directory(
+            os.path.abspath(app.config['RECEIPT_FOLDER']),
+            filename,
+            as_attachment=True,
+            mimetype='application/pdf'
+        )
+    except Exception as e:
+        print(f"[ERROR in /receipt/<receipt_id>]: {e}")
+        return jsonify({"error": "Internal server error"}), 500
+
+
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    app.run(debug=True)
