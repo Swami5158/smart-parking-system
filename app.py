@@ -34,9 +34,16 @@ os.makedirs(app.config['QR_FOLDER'], exist_ok=True)
 # Initialize parking slots
 SLOTS = {f"P{i+1}": None for i in range(10)}
 FREE_SLOT_QUEUE = deque(SLOTS.keys())
+import os
+from ultralytics import YOLO
 
-# Load YOLO model
-yolo_model = YOLO("smart_parking_system/BEST2.pt")
+# Build path to model relative to app.py
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+model_path = os.path.join(BASE_DIR, "BEST2.pt")
+
+# Load the model
+yolo_model = YOLO(model_path)
+
 
 def extract_plate_number(image_path):
     img = cv2.imread(image_path)
