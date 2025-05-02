@@ -1,3 +1,12 @@
+flask
+numpy>=1.23
+opencv-python
+ultralytics
+pytesseract
+Pillow
+qrcode
+reportlab
+
 aiohappyeyeballs==2.6.1
 aiohttp==3.11.16
 aiohttp-retry==2.9.1
@@ -82,7 +91,6 @@ pyttsx3==2.98
 pytweening==1.2.0
 pytz==2025.2
 pywhatkit==5.4
-pywin32==310
 PyYAML==6.0.2
 qrcode==8.1
 qtwidgets==1.1
