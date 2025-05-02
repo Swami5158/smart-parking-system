@@ -36,7 +36,7 @@ SLOTS = {f"P{i+1}": None for i in range(10)}
 FREE_SLOT_QUEUE = deque(SLOTS.keys())
 
 # Load YOLO model
-yolo_model = YOLO("C:/Users/sai/Downloads/BEST2.pt")
+yolo_model = YOLO("smart_parking_system/BEST2.pt")
 
 def extract_plate_number(image_path):
     img = cv2.imread(image_path)
