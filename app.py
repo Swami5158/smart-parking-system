@@ -15,6 +15,7 @@ from fpdf import FPDF
 
 import razorpay
 
+
 # Replace with your Razorpay Test Mode keys
 RAZORPAY_KEY_ID = "rzp_test_amuSbEd1v4Drm4"
 RAZORPAY_KEY_SECRET = "4gEt025e0D7J2qVlEfre9EFO"
@@ -34,6 +35,8 @@ os.makedirs(app.config['QR_FOLDER'], exist_ok=True)
 # Initialize parking slots
 SLOTS = {f"P{i+1}": None for i in range(10)}
 FREE_SLOT_QUEUE = deque(SLOTS.keys())
+
+# Load YOLO model
 import os
 from ultralytics import YOLO
 
@@ -43,6 +46,9 @@ model_path = os.path.join(BASE_DIR, "BEST2.pt")
 
 # Load the model
 yolo_model = YOLO(model_path)
+
+
+
 
 
 def extract_plate_number(image_path):
