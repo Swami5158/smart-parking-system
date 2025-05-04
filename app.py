@@ -3,48 +3,72 @@ import uuid
 import time
 from datetime import datetime
 from collections import deque
-from flask import Flask, render_template, request, jsonify, send_from_directory
 
+from flask import Flask, render_template, request, jsonify, send_from_directory
+from flask_sqlalchemy import SQLAlchemy
 
 import cv2
 from PIL import Image
 import pytesseract
 from ultralytics import YOLO
-import qrcode
+import razorpay
 from fpdf import FPDF
 
-import razorpay
-
-# Replace with your Razorpay Test Mode keys
+# --- CONFIGURATION ---
 RAZORPAY_KEY_ID = "rzp_test_amuSbEd1v4Drm4"
 RAZORPAY_KEY_SECRET = "4gEt025e0D7J2qVlEfre9EFO"
 
-razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
-
-
 app = Flask(__name__, static_url_path='', static_folder='static')
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['RECEIPT_FOLDER'] = 'receipts'
-app.config['QR_FOLDER'] = 'static/qrcodes'
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+app.config['UPLOAD_FOLDER'] = os.path.join(BASE_DIR, 'uploads')
+app.config['RECEIPT_FOLDER'] = os.path.join(BASE_DIR, 'receipts')
+app.config['QR_FOLDER'] = os.path.join(BASE_DIR, 'static/qrcodes')
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(BASE_DIR, 'parking.db')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['RECEIPT_FOLDER'], exist_ok=True)
 os.makedirs(app.config['QR_FOLDER'], exist_ok=True)
 
-# Initialize parking slots
-SLOTS = {f"P{i+1}": None for i in range(10)}
-FREE_SLOT_QUEUE = deque(SLOTS.keys())
-import os
-from ultralytics import YOLO
+db = SQLAlchemy(app)
+razorpay_client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
-# Build path to model relative to app.py
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# --- DATABASE MODELS ---
+class Slot(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(10), unique=True, nullable=False)
+    is_occupied = db.Column(db.Boolean, default=False)
+    plate = db.Column(db.String(20), nullable=True)
+    entry_time = db.Column(db.DateTime, nullable=True)
+
+class Payment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    plate = db.Column(db.String(20))
+    slot = db.Column(db.String(10))
+    entry_time = db.Column(db.DateTime)
+    duration = db.Column(db.Float)
+    amount = db.Column(db.Integer)
+    receipt_id = db.Column(db.String(100))
+    order_id = db.Column(db.String(100))
+    payment_id = db.Column(db.String(100))
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+# --- LOAD YOLO MODEL ---
 model_path = os.path.join(BASE_DIR, "BEST2.pt")
-
-# Load the model
 yolo_model = YOLO(model_path)
 
+# --- INITIALIZE SLOTS ---
+@app.before_request
+def setup():
+    db.create_all()  # Ensure that the database schema is created
+    # Check if there are no slots in the database, then add them
+    if Slot.query.count() == 0:
+        for i in range(10):
+            db.session.add(Slot(name=f"P{i+1}"))
+        db.session.commit()
 
+# --- UTILITY FUNCTIONS ---
 def extract_plate_number(image_path):
     img = cv2.imread(image_path)
     results = yolo_model(img)[0]
@@ -60,22 +84,6 @@ def extract_plate_number(image_path):
             return text.strip().replace(" ", "").replace("\n", "")
     return "UNKNOWN"
 
-def generate_mock_qr(amount, plate):
-    data = f"https://mockpayment.com/pay?plate={plate}&amount={amount}"
-    filename = f"{plate}_{int(time.time())}.png"
-    qr_path = os.path.join(app.config['QR_FOLDER'], filename)
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_H,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(data)
-    qr.make(fit=True)
-    img = qr.make_image(fill_color="black", back_color="white")
-    img.save(qr_path)
-    return f"/static/qrcodes/{filename}"
-
 def generate_pdf_receipt(plate, duration, amount):
     receipt_id = str(uuid.uuid4())
     receipt_path = os.path.join(app.config['RECEIPT_FOLDER'], f"{receipt_id}.pdf")
@@ -88,16 +96,15 @@ def generate_pdf_receipt(plate, duration, amount):
     pdf.output(receipt_path)
     return receipt_id
 
+# --- ROUTES ---
 @app.route('/')
 def index():
     return render_template('index.html')
 
 @app.route('/slots')
 def get_slots():
-    return jsonify({slot: 'red' if SLOTS[slot] else 'green' for slot in SLOTS})
-
-# Track payment status before allowing receipt generation
-PAYMENT_TRACKER = {}
+    slots = Slot.query.all()
+    return jsonify({slot.name: 'red' if slot.is_occupied else 'green' for slot in slots})
 
 @app.route('/process_entry', methods=['POST'])
 def process_entry():
@@ -112,146 +119,113 @@ def process_entry():
     plate = extract_plate_number(path)
     time_now = datetime.now()
 
-    # Check if the vehicle is already parked
-    for slot, info in SLOTS.items():
-        if info and info['plate'].upper() == plate.upper():
-            return jsonify({
-                "message": f"Vehicle with plate {plate} is already parked in slot {slot}",
-                "slot": slot,
-                "plate": plate
-            })
+    # Check if vehicle already parked
+    existing = Slot.query.filter_by(plate=plate, is_occupied=True).first()
+    if existing:
+        return jsonify({"message": f"Vehicle with plate {plate} is already parked in slot {existing.name}", "slot": existing.name, "plate": plate})
 
-    # If no match, assign a new slot
-    if not FREE_SLOT_QUEUE:
-        return jsonify({"message": "All slots are full"}), 200
+    # Assign free slot
+    free_slot = Slot.query.filter_by(is_occupied=False).first()
+    if not free_slot:
+        return jsonify({"message": "All slots are full"})
 
-    slot = FREE_SLOT_QUEUE.popleft()
-    SLOTS[slot] = {"plate": plate, "entry_time": time_now}
+    free_slot.plate = plate
+    free_slot.entry_time = time_now
+    free_slot.is_occupied = True
+    db.session.commit()
 
-    return jsonify({
-        "message": f"Slot {slot} assigned",
-        "slot": slot,
-        "plate": plate
-    })
+    return jsonify({"message": f"Slot {free_slot.name} assigned", "slot": free_slot.name, "plate": plate})
 
 @app.route('/process_exit', methods=['POST'])
 def process_exit():
-    try:
-        file = request.files.get('image')
-        if not file:
-            return jsonify({'error': 'No file uploaded'}), 400
+    file = request.files.get('image')
+    if not file:
+        return jsonify({'error': 'No file uploaded'}), 400
 
-        filename = f"{uuid.uuid4()}.jpg"
-        path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        file.save(path)
+    filename = f"{uuid.uuid4()}.jpg"
+    path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+    file.save(path)
 
-        exit_plate = extract_plate_number(path)
-        matched_slot = None
+    exit_plate = extract_plate_number(path)
+    matched = Slot.query.filter_by(plate=exit_plate, is_occupied=True).first()
+    if not matched:
+        return jsonify({'error': f"No match found for plate {exit_plate}"}), 404
 
-        for slot, info in SLOTS.items():
-            if info and info['plate'].upper() == exit_plate.upper():
-                matched_slot = slot
-                break
+    entry_time = matched.entry_time
+    duration_seconds = (datetime.now() - entry_time).total_seconds()
+    cost = int(duration_seconds)
 
-        if not matched_slot:
-            return jsonify({'error': f"No match found for plate {exit_plate}"}), 404
+    order = razorpay_client.order.create({
+        "amount": cost * 100,
+        "currency": "INR",
+        "payment_capture": 1,
+        "receipt": f"receipt_{exit_plate}_{int(time.time())}"
+    })
 
-        entry_time = SLOTS[matched_slot]['entry_time']
-        duration_seconds = (datetime.now() - entry_time).total_seconds()
-        cost = int(duration_seconds)
+    payment = Payment(
+        plate=exit_plate,
+        slot=matched.name,
+        entry_time=entry_time,
+        duration=duration_seconds / 60,
+        amount=cost,
+        order_id=order['id']
+    )
+    db.session.add(payment)
+    db.session.commit()
 
-        # Create Razorpay order (in test mode or real as needed)
-        order = razorpay_client.order.create({
-            "amount": cost * 100,  # amount in paise
-            "currency": "INR",
-            "payment_capture": 1,
-            "receipt": f"receipt_{exit_plate}_{int(time.time())}"
-        })
-
-        # Store temporary data until payment is completed
-        PAYMENT_TRACKER[order['id']] = {
-            'plate': exit_plate,
-            'slot': matched_slot,
-            'entry_time': entry_time,
-            'cost': cost,
-            'duration': duration_seconds / 60  # in minutes
-        }
-
-        return jsonify({
-            "message": "Payment required",
-            "order_id": order['id'],
-            "amount": cost,
-            "razorpay_key": "rzp_test_amuSbEd1v4Drm4",  # Replace with actual test key
-            "slot_freed": matched_slot,
-            "plate": exit_plate
-        })
-
-    except Exception as e:
-        print(f"[ERROR] {e}")
-        return jsonify({'error': 'Internal server error'}), 500
-
+    return jsonify({
+        "message": "Payment required",
+        "order_id": order['id'],
+        "amount": cost,
+        "razorpay_key": RAZORPAY_KEY_ID,
+        "slot_freed": matched.name,
+        "plate": exit_plate
+    })
 
 @app.route('/verify_payment', methods=['POST'])
 def verify_payment():
-    try:
-        data = request.json
-        order_id = data.get('order_id')
-        payment_id = data.get('payment_id')
-        signature = data.get('signature')
+    data = request.json
+    order_id = data.get('order_id')
+    payment_id = data.get('payment_id')
+    signature = data.get('signature')
 
-        params_dict = {
+    try:
+        razorpay_client.utility.verify_payment_signature({
             'razorpay_order_id': order_id,
             'razorpay_payment_id': payment_id,
             'razorpay_signature': signature
-        }
+        })
 
-        razorpay_client.utility.verify_payment_signature(params_dict)
-
-        # Get transaction details
-        payment_info = PAYMENT_TRACKER.pop(order_id, None)
-        if not payment_info:
+        payment = Payment.query.filter_by(order_id=order_id).first()
+        if not payment:
             return jsonify({"error": "Payment info not found"}), 404
 
-        receipt_id = generate_pdf_receipt(
-            payment_info['plate'],
-            payment_info['duration'],
-            payment_info['cost']
-        )
+        receipt_id = generate_pdf_receipt(payment.plate, payment.duration, payment.amount)
+        payment.receipt_id = receipt_id
+        payment.payment_id = payment_id
 
-        # Free the slot
-        SLOTS[payment_info['slot']] = None
-        FREE_SLOT_QUEUE.append(payment_info['slot'])
+        slot = Slot.query.filter_by(name=payment.slot).first()
+        slot.is_occupied = False
+        slot.plate = None
+        slot.entry_time = None
 
-        return jsonify({
-            "message": "Payment verified",
-            "receipt_url": f"/receipt/{receipt_id}"
-        })
+        db.session.commit()
+
+        return jsonify({"message": "Payment verified", "receipt_url": f"/receipt/{receipt_id}"})
 
     except razorpay.errors.SignatureVerificationError:
         return jsonify({"error": "Signature verification failed"}), 400
     except Exception as e:
-        print(f"[ERROR in verify_payment]: {e}")
+        print(f"[ERROR verify_payment] {e}")
         return jsonify({"error": "Internal server error"}), 500
-
 
 @app.route('/receipt/<receipt_id>')
 def download_receipt(receipt_id):
-    try:
-        filename = f"{receipt_id}.pdf"
-        filepath = os.path.join(app.config['RECEIPT_FOLDER'], filename)
-        if not os.path.exists(filepath):
-            return jsonify({"error": "Receipt not found"}), 404
-        return send_from_directory(
-            os.path.abspath(app.config['RECEIPT_FOLDER']),
-            filename,
-            as_attachment=True,
-            mimetype='application/pdf'
-        )
-    except Exception as e:
-        print(f"[ERROR in /receipt/<receipt_id>]: {e}")
-        return jsonify({"error": "Internal server error"}), 500
-
-
+    filename = f"{receipt_id}.pdf"
+    filepath = os.path.join(app.config['RECEIPT_FOLDER'], filename)
+    if not os.path.exists(filepath):
+        return jsonify({"error": "Receipt not found"}), 404
+    return send_from_directory(app.config['RECEIPT_FOLDER'], filename, as_attachment=True, mimetype='application/pdf')
 
 if __name__ == '__main__':
     app.run(debug=True)
