@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Exit Result</title>
+</head>
+<body>
+    <h1>Exit Processed Successfully</h1>
+    <p><strong>Plate:</strong> {{ plate }}</p>
+    <p><strong>Slot:</strong> {{ slot }}</p>
+    <p><strong>Amount to Pay:</strong> Rs. {{ amount }}</p>
+    <h3>Scan QR Code to Pay:</h3>
+    <img src="{{ qr_image }}" alt="QR Code" width="200">
+    <p><a href="{{ receipt_url }}" target="_blank">Download Receipt (PDF)</a></p>
+</body>
+</html>
